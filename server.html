@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Broadcaster</title>
+</head>
+<body>
+    <video id="inputVideo" autoplay muted loop playsinline></video>
+    <video id="outputVideo" autoplay muted loop playsinline></video>
+    <button id="playButton">Play</button>
+</body>
+<style>
+    video {
+        width: 400px;
+    }
+</style>
+<script>
+    let inputVideo = document.querySelector('#inputVideo');
+    let outputVideo = document.querySelector('#outputVideo');
+    let playButton = document.querySelector('#playButton');
+    let rtc = null;
+    let liveStream = null;
+    let socket = new WebSocket("ws://localhost:3000");
+
+    socket.onopen = () => {
+        console.log("WebSocket connected.");
+        socket.send(JSON.stringify({ type: "broadcaster" }));
+    };
+
+    playButton.addEventListener("click", async () => {
+        inputVideo.src = "./B737.webm";
+        inputVideo.play(); // 确保视频开始播放
+
+        inputVideo.onplaying = () => {
+            liveStream = inputVideo.captureStream();
+            outputVideo.srcObject = liveStream;
+            outputVideo.play();
+            createRTCPeerConnection();
+        };
+    });
+
+    function createRTCPeerConnection() {
+        rtc = new RTCPeerConnection();
+        
+        // 添加所有 track
+        liveStream.getTracks().forEach(track => {
+            rtc.addTrack(track, liveStream);
+        });
+
+        rtc.createOffer().then(offer => {
+            rtc.setLocalDescription(offer);
+            socket.send(JSON.stringify({ type: "offer", sdp:offer.sdp }));
+        });
+
+        rtc.onicecandidate = event => {
+            if (event.candidate) {
+                socket.send(JSON.stringify({ type: "iceCandidate", candidate: event.candidate }));
+            }
+        };
+    }
+
+    socket.onmessage = async event => {
+        let data = JSON.parse(event.data);
+        if (data.type === "answer") {
+            await rtc.setRemoteDescription(new RTCSessionDescription(data));
+        } else if (data.type === "iceCandidate") {
+            rtc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+    };
+</script>
+</html>

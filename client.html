@@ -1,0 +1,71 @@
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <video id="outputVideo" autoplay muted></video>
+</body>
+<script>
+    let outputVideo = document.querySelector('#outputVideo');
+    let rtc = new RTCPeerConnection();
+    let socket = new WebSocket("ws://127.0.0.1:3000");
+    socket.onopen = () => {
+        socket.send(JSON.stringify({ type: "viewer" }));
+    };
+    socket.onmessage = async (event) => {
+        let data = JSON.parse(event.data);
+        try {
+            if (data.type === "offer") {
+                await rtc.setRemoteDescription(new RTCSessionDescription(data));
+                let answer = await rtc.createAnswer();
+                await rtc.setLocalDescription(answer);
+                socket.send(JSON.stringify(answer));
+            } else if (data.type === "iceCandidate" && data.candidate) {
+                await rtc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } else
+            {
+                console.log("unknown message:", data);
+            }
+        } catch (error) {
+            console.error("Failed to handle message:", error);
+        }
+    };
+
+
+    rtc.ontrack = async (event) => {
+        console.log('Received track:', event.track.kind);
+        outputVideo.srcObject = event.streams[0];
+        console.log('Stream tracks:', event.streams[0].getTracks());
+    };
+
+    rtc.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.send(JSON.stringify({ type: 'iceCandidate', candidate: event.candidate }));
+        }
+    };
+
+    rtc.oniceconnectionstatechange = function () {
+        console.log('ICE state: ', rtc.iceConnectionState);
+        if (rtc.iceConnectionState === 'failed' || rtc.iceConnectionState === 'disconnected' || rtc.iceConnectionState === 'closed') {
+            console.error('ICE state indicate failure');
+        }
+    };
+
+    rtc.onsignalingstatechange = function () {
+        console.log('Signaling state: ', rtc.signalingState);
+    };
+    outputVideo.onplay = () => {
+        console.log('Video is now playing.');
+    };
+    outputVideo.onloadeddata = () => {
+        console.log('Video data has loaded.');
+    };
+
+
+</script>
+
+</html>
