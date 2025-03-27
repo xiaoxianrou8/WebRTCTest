@@ -7,10 +7,24 @@
 </head>
 
 <body>
-    <video id="outputVideo" autoplay muted></video>
+    <button id="btn_send">发送坐标</button>
+    <video id="outputVideo" style="width: 100vw;" autoplay muted></video>
 </body>
 <script>
+    let cameraConfig = [{
+        Translate: "[0, 0, 0]",
+        Rotation: "[0, 0, 0]"
+    }, {
+        Translate: "[-6724.999876, 0, 1249.941101]",
+        Rotation: "[-18.341496, 0, 0]"
+    },{
+        Translate: "[-1395.861139, 0, 4140.901706]",
+        Rotation: "[0, 0, -90]"
+    }];
+
     let outputVideo = document.querySelector('#outputVideo');
+    let btn_send = document.querySelector('#btn_send');
+
     let rtc = new RTCPeerConnection();
 
     let mungeSDPOffer = function (offer) {
@@ -35,42 +49,66 @@
         offer.sdp = offer.sdp.replace('useinbandfec=1', audioSDP);
     }
 
-    let setupTransceiversAsync = async function(pc){
-        
+    function setupDataChannelCallbacks(datachannel) {
+        try {
+            // Inform browser we would like binary data as an ArrayBuffer (FF chooses Blob by default!)
+            datachannel.binaryType = "arraybuffer";
+
+            datachannel.onopen = function (e) {
+                console.log("Data channel connected");
+            }
+
+            datachannel.onclose = function (e) {
+                console.log("Data channel connected", e);
+            }
+
+            datachannel.onmessage = function (e) {
+
+            }
+
+            datachannel.onerror = function (e) {
+                console.error("Data channel error", e);
+            }
+
+            return datachannel;
+        }
+        catch (e) {
+            console.error(e);
+            return null;
+        }
+    }
+
+    let setupTransceiversAsync = async function (pc) {
+
         let hasTransceivers = pc.getTransceivers().length > 0;
 
         // Setup a transceiver for getting UE video
         pc.addTransceiver("video", { direction: "recvonly" });
 
         // Setup a transceiver for sending mic audio to UE and receiving audio from UE
-        if(!self.useMic)
-        {
+        if (!self.useMic) {
             pc.addTransceiver("audio", { direction: "recvonly" });
         }
-        else
-        {
-            let audioSendOptions = self.useMic ? 
-            {
-                autoGainControl: false,
-                channelCount: 1,
-                echoCancellation: false,
-                latency: 0,
-                noiseSuppression: false,
-                sampleRate: 48000,
-                volume: 1.0
-            } : false;
+        else {
+            let audioSendOptions = self.useMic ?
+                {
+                    autoGainControl: false,
+                    channelCount: 1,
+                    echoCancellation: false,
+                    latency: 0,
+                    noiseSuppression: false,
+                    sampleRate: 48000,
+                    volume: 1.0
+                } : false;
 
             // Note using mic on android chrome requires SSL or chrome://flags/ "unsafely-treat-insecure-origin-as-secure"
-            const stream = await navigator.mediaDevices.getUserMedia({video: false, audio: audioSendOptions});
-            if(stream)
-            {
-                if(hasTransceivers){
-                    for(let transceiver of pc.getTransceivers()){
-                        if(transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === "audio")
-                        {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: audioSendOptions });
+            if (stream) {
+                if (hasTransceivers) {
+                    for (let transceiver of pc.getTransceivers()) {
+                        if (transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === "audio") {
                             for (const track of stream.getTracks()) {
-                                if(track.kind && track.kind == "audio")
-                                {
+                                if (track.kind && track.kind == "audio") {
                                     transceiver.sender.replaceTrack(track);
                                     transceiver.direction = "sendrecv";
                                 }
@@ -78,40 +116,38 @@
                         }
                     }
                 }
-                else
-                {
+                else {
                     for (const track of stream.getTracks()) {
-                        if(track.kind && track.kind == "audio")
-                        {
+                        if (track.kind && track.kind == "audio") {
                             pc.addTransceiver(track, { direction: "sendrecv" });
                         }
                     }
                 }
             }
-            else
-            {
+            else {
                 pc.addTransceiver("audio", { direction: "recvonly" });
             }
         }
     };
-    let socket = new WebSocket("ws://127.0.0.1:80");
+    let socket = new WebSocket("ws://127.0.0.1:5001");
     socket.onopen = () => {
         //socket.send(JSON.stringify({ type: "viewer" }));
     };
+    let dcClient = null;
     socket.onmessage = async (event) => {
         let data = JSON.parse(event.data);
         try {
             if (data.type === "offer") {
                 await rtc.setRemoteDescription(new RTCSessionDescription(data));
-                setupTransceiversAsync(rtc).finally(function(){
-                    rtc.createAnswer().then(answer=>{
-                    mungeSDPOffer(answer);
-                    return rtc.setLocalDescription(answer);
-                }).then(()=>{
-                    socket.send(JSON.stringify(rtc.currentLocalDescription));
-                });
+                setupTransceiversAsync(rtc).finally(function () {
+                    rtc.createAnswer().then(answer => {
+                        mungeSDPOffer(answer);
+                        return rtc.setLocalDescription(answer);
+                    }).then(() => {
+                        socket.send(JSON.stringify(rtc.currentLocalDescription));
+                    });
                 })
-                
+
             } else if (data.type === "iceCandidate" && data.candidate) {
                 await rtc.addIceCandidate(new RTCIceCandidate(data.candidate));
             } else {
@@ -125,7 +161,7 @@
 
     rtc.ontrack = async (event) => {
         console.log('Received track:', event.track.kind);
-        if(event.track.kind == "video"){
+        if (event.track.kind == "video") {
 
             outputVideo.srcObject = event.streams[0];
 
@@ -154,13 +190,47 @@
     rtc.onsignalingstatechange = function () {
         console.log('Signaling state: ', rtc.signalingState);
     };
+
+    rtc.ondatachannel = function (dataChannelEvent) {
+        dcClient = dataChannelEvent.channel;
+        setupDataChannelCallbacks(dcClient);
+    }
+
     outputVideo.onplay = () => {
         console.log('Video is now playing.');
     };
     outputVideo.onloadeddata = () => {
         console.log('Video data has loaded.');
     };
+    function emitDescriptor(messageType, descriptor) {
+        // Convert the dscriptor object into a JSON string.
+        let descriptorAsString = JSON.stringify(descriptor);
 
+        // Add the UTF-16 JSON string to the array byte buffer, going two bytes at
+        // a time.
+        let data = new DataView(new ArrayBuffer(1 + 2 + 2 * descriptorAsString.length));
+        let byteIdx = 0;
+        data.setUint8(byteIdx, messageType);
+        byteIdx++;
+        data.setUint16(byteIdx, descriptorAsString.length, true);
+        byteIdx += 2;
+        for (i = 0; i < descriptorAsString.length; i++) {
+            data.setUint16(byteIdx, descriptorAsString.charCodeAt(i), true);
+            byteIdx += 2;
+        }
+        sendInputData(data.buffer);
+    }
+    function sendInputData(data) {
+        if (dcClient && dcClient.readyState == 'open') {
+            dcClient.send(data);
+        }
+    }
+    //发数
+    var currentIndex=0;
+    btn_send.addEventListener("click", (element, event) => {
+        currentIndex= (currentIndex+1)%cameraConfig.length;
+        emitDescriptor(50, cameraConfig[currentIndex]);
+    });
 
 </script>
 
